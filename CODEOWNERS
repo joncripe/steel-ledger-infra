@@ -1,0 +1,4 @@
+# Default owner for everything in this repo.
+# Solo project for now; this auto-requests review the moment a second
+# contributor is added, no changes needed later.
+* @joncripe
