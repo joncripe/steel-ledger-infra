@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.10.0"
 
   required_providers {
     aws = {
@@ -9,11 +9,11 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "steel-ledger-tfstate"
-    key            = "dev/ec2-mac-dev.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "steel-ledger-tf-locks"
-    encrypt        = true
+    bucket       = "steel-ledger-tfstate"
+    key          = "dev/ec2-mac-dev.tfstate"
+    region       = "us-east-1"
+    use_lockfile = true
+    encrypt      = true
   }
 }
 

@@ -9,9 +9,3 @@ variable "state_bucket_name" {
   type        = string
   default     = "steel-ledger-tfstate"
 }
-
-variable "lock_table_name" {
-  description = "DynamoDB table name for state locking."
-  type        = string
-  default     = "steel-ledger-tf-locks"
-}
