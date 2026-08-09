@@ -9,7 +9,7 @@ Terraform for all AWS infra behind **The Steel Ledger**: RDS, App Runner, S3, Se
 - Jira: project `TSL`, Epic 1 = `TSL-4`
 
 ## Stack
-Terraform, AWS. State: S3 backend + DynamoDB lock table. One reusable module, per-environment `.tfvars` (dev/stage/prod).
+Terraform, AWS. State: S3 backend with native locking (`use_lockfile`), no DynamoDB table. One reusable module, per-environment `.tfvars` (dev/stage/prod).
 
 ## Used by
 `steel-ledger-api` and `steel-ledger-ios` depend on resources provisioned here. Their CLAUDE.md files link back to this repo rather than duplicating infra details.
@@ -19,4 +19,4 @@ Terraform, AWS. State: S3 backend + DynamoDB lock table. One reusable module, pe
 - New infra decision? Add an ADR to `/docs/adr`
 
 ## Current status
-Pre-Terraform. Nothing provisioned yet. Update as modules are added.
+EC2 Mac dev module and state bootstrap built and verified in dev, then torn down (project paused). RDS, App Runner, S3, Secrets Manager not started.
