@@ -1,0 +1,6 @@
+# Copy to dev.tfvars (gitignored) and fill in real values.
+
+aws_region        = "us-east-1"
+availability_zone = "us-east-1a" # confirm mac2.metal capacity in this AZ first
+ssh_allowed_cidr  = "203.0.113.4/32" # your IP -- run `curl -s ifconfig.me`
+key_name          = "steel-ledger-dev"
