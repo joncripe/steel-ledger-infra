@@ -1,0 +1,36 @@
+# Scheduled health checks for the infrastructure in this repo.
+# Each check is its own job, so a failure shows exactly what broke.
+#
+# Current checks:
+#   oidc  - GitHub Actions can assume the dev role via OIDC (ADR 0005)
+#
+# Planned: drift detection (terraform plan -detailed-exitcode) per root module.
+name: Infra health
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # 09:00 UTC daily (3-4am US Central). Runs from main only.
+  workflow_dispatch:
+  # schedule and workflow_dispatch only take effect once this file is on the
+  # default branch, so also run on any PR that changes it.
+  pull_request:
+    paths:
+      - .github/workflows/infra-health.yml
+
+permissions:
+  id-token: write # lets jobs request a GitHub OIDC token
+  contents: read
+
+jobs:
+  oidc:
+    name: OIDC auth (dev)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assume dev role via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::474471039371:role/steel-ledger-dev-gha
+          aws-region: us-east-1
+
+      - name: Show assumed identity
+        run: aws sts get-caller-identity

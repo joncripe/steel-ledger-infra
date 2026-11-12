@@ -19,4 +19,4 @@ Terraform, AWS. State: S3 backend with native locking (`use_lockfile`), no Dynam
 - New infra decision? Add an ADR to `/docs/adr`
 
 ## Current status
-EC2 Mac dev module and state bootstrap built and verified in dev, then torn down (project paused). RDS, App Runner, S3, Secrets Manager not started.
+EC2 Mac dev module built and verified in dev, then torn down. `bootstrap/` is live: S3 state bucket (bootstrap state stored in it too), GitHub OIDC provider, per-env CI roles (`steel-ledger-{dev,stage,prod}-gha`; only dev has permissions), and ECR repo `steel-ledger-api`. `Infra health` workflow runs a nightly OIDC check. RDS, App Runner, Secrets Manager not started.
