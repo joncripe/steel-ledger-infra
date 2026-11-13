@@ -1,8 +1,8 @@
 # EC2 Mac dev instance: one-time setup
 
-The `mac2.metal` dev instance ([modules/ec2-mac-dev/](../modules/ec2-mac-dev/), provisioned per environment in [environments/dev/](../environments/dev/)) only opens port 22 in its security group — port 5900 (VNC) is intentionally never exposed. To reach the desktop over Screen Sharing, you tunnel VNC traffic through SSH. This only needs to be done once per instance; see the [README](../README.md#connecting-to-the-ec2-mac-dev-instance) for day-to-day connect/disconnect.
+The `mac2.metal` dev instance ([modules/ec2-mac-dev/](../modules/ec2-mac-dev/), provisioned per environment in [environments/dev-mac/](../environments/dev-mac/)) only opens port 22 in its security group — port 5900 (VNC) is intentionally never exposed. To reach the desktop over Screen Sharing, you tunnel VNC traffic through SSH. This only needs to be done once per instance; see the [README](../README.md#connecting-to-the-ec2-mac-dev-instance) for day-to-day connect/disconnect.
 
-1. **Get the instance IP** (from `environments/dev`):
+1. **Get the instance IP** (from `environments/dev-mac`):
    ```
    terraform output mac_dev_public_ip
    ```

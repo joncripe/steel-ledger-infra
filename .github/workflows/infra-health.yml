@@ -2,7 +2,7 @@
 # Each check is its own job, so a failure shows exactly what broke.
 #
 # Current checks:
-#   oidc  - GitHub Actions can assume the dev role via OIDC (ADR 0005)
+#   oidc  - GitHub Actions can assume the dev plan role via OIDC (ADR 0005, 0008)
 #
 # Planned: drift detection (terraform plan -detailed-exitcode) per root module.
 name: Infra health
@@ -16,6 +16,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/infra-health.yml
+      - .github/actions/terraform-setup/**
 
 permissions:
   id-token: write # lets jobs request a GitHub OIDC token
@@ -26,11 +27,14 @@ jobs:
     name: OIDC auth (dev)
     runs-on: ubuntu-latest
     steps:
-      - name: Assume dev role via OIDC
-        uses: aws-actions/configure-aws-credentials@v6
+      - uses: actions/checkout@v7 # needed to use the local setup action
+
+      # Same login path the PR plan job uses, so this nightly run catches
+      # anything that would break plans (trust policy, OIDC provider, repo var).
+      - uses: ./.github/actions/terraform-setup
         with:
-          role-to-assume: arn:aws:iam::474471039371:role/steel-ledger-dev-gha
-          aws-region: us-east-1
+          role: steel-ledger-dev-plan
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
 
       - name: Show assumed identity
         run: aws sts get-caller-identity

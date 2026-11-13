@@ -13,6 +13,7 @@ resource "aws_ec2_host" "mac_dev" {
 }
 
 resource "aws_security_group" "mac_dev" {
+  #checkov:skip=CKV_AWS_382:Dev machine needs open outbound to download Xcode, simulators, Homebrew and packages from many hosts.
   name        = "${var.project_name}-${var.environment}-mac-dev-sg"
   description = "SSH-only access to the EC2 Mac dev instance. VNC (5900) is reached exclusively via SSH tunnel."
   vpc_id      = data.aws_vpc.selected.id
@@ -46,8 +47,19 @@ locals {
 }
 
 resource "aws_instance" "mac_dev" {
+  #checkov:skip=CKV2_AWS_41:The Mac makes no AWS API calls, so it gets no IAM role (and no credentials to steal).
+  #checkov:skip=CKV_AWS_88:Public IP needed to SSH in from home. The security group allows only port 22 from one CIDR; VNC goes through the SSH tunnel.
+  #checkov:skip=CKV_AWS_126:Detailed (1-minute) monitoring costs extra and adds nothing for a short-lived dev box.
   ami           = data.aws_ami.macos.id
   instance_type = var.instance_type
+  ebs_optimized = true
+
+  # IMDSv2 only: metadata requests need a session token, which blocks
+  # SSRF-style tricks that read instance metadata with a plain GET.
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
 
   # tenancy=host + host_id pins this instance to the Dedicated Host --
   # required for all EC2 Mac instances, they cannot run on shared tenancy.

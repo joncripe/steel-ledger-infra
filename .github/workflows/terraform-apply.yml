@@ -1,0 +1,145 @@
+# Applies Terraform from main.
+#
+#   push to main      - applies every root with apply: "auto" (dev).
+#   Run workflow      - promotes one root with apply: "manual" (stage/prod).
+#
+# Roots and their apply mode come from .github/terraform-roots.json.
+# Each job runs inside the root's GitHub Environment, which is the only way
+# to assume steel-ledger-<env>-apply (ADR 0008). The Environments only allow
+# main, so nothing unmerged can be applied.
+name: Terraform apply
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to promote (applies what's on main)
+        type: choice
+        # Keep in sync with the apply: "manual" roots in terraform-roots.json.
+        # The roots job below rejects anything else.
+        options: [stage, prod]
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  roots:
+    name: Pick roots to apply
+    runs-on: ubuntu-latest
+    outputs:
+      apply: ${{ steps.pick.outputs.apply }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read .github/terraform-roots.json
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          NAME: ${{ inputs.environment }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            list=$(jq -c --arg n "$NAME" '[.roots[] | select(.apply == "manual" and .name == $n)]' .github/terraform-roots.json)
+            if [ "$list" = "[]" ]; then
+              echo "::error::'$NAME' isn't an apply: \"manual\" root in terraform-roots.json."
+              exit 1
+            fi
+          else
+            list=$(jq -c '[.roots[] | select(.apply == "auto")]' .github/terraform-roots.json)
+          fi
+          echo "apply=$list" >> "$GITHUB_OUTPUT"
+
+  apply:
+    name: apply (${{ matrix.root.name }})
+    needs: roots
+    if: needs.roots.outputs.apply != '[]'
+    runs-on: ubuntu-latest
+    environment: ${{ matrix.root.env }} # unlocks the env's apply role
+    permissions:
+      contents: read
+      id-token: write
+    # One apply per environment at a time. Never cancel a running apply:
+    # stopping Terraform mid-write can leave state half-saved and the lock
+    # stuck (ADR 0004). A newer run waits; if several pile up, GitHub keeps
+    # only the newest waiting one, which is fine because it applies latest main.
+    concurrency:
+      group: terraform-apply-${{ matrix.root.env }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJSON(needs.roots.outputs.apply) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.root.dir }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/terraform-setup
+        with:
+          role: steel-ledger-${{ matrix.root.env }}-apply
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+
+      - name: terraform init
+        run: terraform init -lockfile=readonly -input=false
+
+      # Plan again here, with the lock, against current state. Never reuse a
+      # PR's plan: main may have moved since.
+      #
+      # PUBLIC REPO: same rule as the PR workflow. Only the summary line,
+      # changed resource addresses and error headlines are printed.
+      - name: terraform plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -input=false -no-color -detailed-exitcode -out=tfplan > plan.txt 2>&1
+          code=$?
+          set -e
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+
+          grep -E '^(Plan: |No changes\.)' plan.txt > summary.txt || true
+          grep -E '^(│ )?Error: ' plan.txt | sed 's/^│ //' >> summary.txt || true
+
+          : > resources.txt
+          if [ "$code" -eq 2 ]; then
+            terraform show -json tfplan | jq -r '
+              .resource_changes[]?
+              | select(.change.actions != ["no-op"])
+              | (.change.actions | join(",")) as $a
+              | ({"create":"+", "delete":"-", "update":"~", "read":"<=",
+                  "delete,create":"-/+", "create,delete":"+/-"}[$a] // $a)
+                + " " + .address' > resources.txt
+          fi
+
+          cat summary.txt resources.txt
+          {
+            echo "### Plan: \`${{ matrix.root.name }}\`"
+            echo '```'; cat summary.txt resources.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$code" -ne 1 ]
+
+      # Only when the plan found changes (exit code 2).
+      # Prints resource progress without [id=...] values, the final
+      # "Apply complete!" line, and error headlines. No outputs.
+      - name: terraform apply
+        if: steps.plan.outputs.exitcode == '2'
+        run: |
+          set +e
+          terraform apply -input=false -no-color tfplan > apply.txt 2>&1
+          code=$?
+          set -e
+
+          grep -E ': (Creation|Modifications|Destruction) complete|^Apply complete!|^(│ )?Error: ' apply.txt \
+            | sed -E 's/^│ //; s/ \[id=[^]]*\]//' > apply-summary.txt || true
+
+          cat apply-summary.txt
+          {
+            echo "### Apply: \`${{ matrix.root.name }}\`"
+            echo '```'; cat apply-summary.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"

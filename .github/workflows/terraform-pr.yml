@@ -1,0 +1,229 @@
+# Runs on every PR into main.
+#
+#   checks - fmt, validate, tflint, checkov. Code only; no AWS access.
+#   plan   - terraform plan per root (plan: true in terraform-roots.json),
+#            posted as one PR comment per root, updated on each push.
+#
+# Which folders get checked comes from .github/terraform-roots.json.
+# Terraform version + AWS login live in .github/actions/terraform-setup.
+name: Terraform PR
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to the same PR cancels the older, now-stale run.
+concurrency:
+  group: terraform-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true" # trims "next, run terraform apply" hints from output
+
+jobs:
+  roots:
+    name: Read root list
+    runs-on: ubuntu-latest
+    outputs:
+      all: ${{ steps.read.outputs.all }}
+      plan: ${{ steps.read.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read .github/terraform-roots.json
+        id: read
+        run: |
+          echo "all=$(jq -c '.roots' .github/terraform-roots.json)" >> "$GITHUB_OUTPUT"
+          echo "plan=$(jq -c '[.roots[] | select(.plan)]' .github/terraform-roots.json)" >> "$GITHUB_OUTPUT"
+
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/terraform-setup
+
+      # Whole repo in one go, modules included. -diff shows what to fix.
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive -diff
+
+  validate:
+    name: validate (${{ matrix.root.name }})
+    needs: roots
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # one broken root shouldn't hide results for the others
+      matrix:
+        root: ${{ fromJSON(needs.roots.outputs.all) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.root.dir }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/terraform-setup
+
+      # -backend=false: download providers only, never touch the S3 state.
+      #   No AWS credentials and no tfvars needed, so this is safe for dev too.
+      # -lockfile=readonly: fail if .terraform.lock.hcl is out of date
+      #   instead of quietly rewriting it.
+      - name: terraform init
+        run: terraform init -backend=false -lockfile=readonly -input=false
+
+      - name: terraform validate
+        run: terraform validate
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-${{ hashFiles('.tflint.hcl') }}
+
+      - uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: v0.66.0
+
+      - name: tflint --init
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # avoids GitHub API rate limits when downloading plugins
+
+      # Absolute --config: see the note at the top of .tflint.hcl.
+      - name: tflint
+        run: tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --format compact
+
+  checkov:
+    name: checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Fails the build on any finding. Accepted findings get an inline
+      #   #checkov:skip=<CHECK_ID>:<reason>
+      # on the resource, so every exception is visible and explained.
+      - name: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          quiet: true # only print failures
+          download_external_modules: false
+
+  plan:
+    name: plan (${{ matrix.root.name }})
+    needs: [roots, validate] # don't spend AWS calls on code that doesn't validate
+    if: needs.roots.outputs.plan != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC login to the root's plan role
+      pull-requests: write # post the plan comment
+    strategy:
+      fail-fast: false
+      matrix:
+        root: ${{ fromJSON(needs.roots.outputs.plan) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.root.dir }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Look-only role: can read AWS settings and this root's state, nothing else.
+      - uses: ./.github/actions/terraform-setup
+        with:
+          role: steel-ledger-${{ matrix.root.env }}-plan
+          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+
+      - name: terraform init
+        run: terraform init -lockfile=readonly -input=false
+
+      # -lock=false: the plan role can't write the .tflock, and a read-only
+      #   plan doesn't need the lock anyway.
+      # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error.
+      #   Only 1 fails the job.
+      #
+      # PUBLIC REPO: logs and comments are world-readable, so the full plan
+      # (attribute values) is never printed. Only the summary line, the
+      # changed resource addresses, and error headlines leave the runner.
+      # For the full diff, run `terraform plan` locally.
+      - name: terraform plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -lock=false -input=false -no-color -detailed-exitcode -out=tfplan > plan.txt 2>&1
+          code=$?
+          set -e
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+
+          grep -E '^(Plan: |No changes\.)' plan.txt > summary.txt || true
+          grep -E '^(│ )?Error: ' plan.txt | sed 's/^│ //' >> summary.txt || true
+
+          # One line per changed resource, e.g. "+ aws_iam_role.ci[\"dev-plan\"]".
+          : > resources.txt
+          if [ "$code" -eq 2 ]; then
+            terraform show -json tfplan | jq -r '
+              .resource_changes[]?
+              | select(.change.actions != ["no-op"])
+              | (.change.actions | join(",")) as $a
+              | ({"create":"+", "delete":"-", "update":"~", "read":"<=",
+                  "delete,create":"-/+", "create,delete":"+/-"}[$a] // $a)
+                + " " + .address' > resources.txt
+          fi
+
+          cat summary.txt resources.txt
+          [ "$code" -ne 1 ]
+
+      # One comment per root, found by a hidden marker and edited in place,
+      # so a PR with 10 pushes still has one plan comment per root.
+      - name: Post plan to PR
+        if: always() && steps.plan.outputs.exitcode != ''
+        uses: actions/github-script@v9
+        env:
+          ROOT: ${{ matrix.root.name }}
+          DIR: ${{ matrix.root.dir }}
+          EXITCODE: ${{ steps.plan.outputs.exitcode }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { ROOT, DIR, EXITCODE } = process.env;
+            const marker = `<!-- terraform-plan:${ROOT} -->`;
+            const read = f => {
+              try { return fs.readFileSync(path.join(DIR, f), 'utf8').trim(); } catch { return ''; }
+            };
+
+            const summary = read('summary.txt') || '(no summary found)';
+            const resources = read('resources.txt');
+            const status = { '0': '✅ No changes', '2': '📝 Changes', '1': '❌ Failed' }[EXITCODE];
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              `### Terraform plan: \`${ROOT}\` · ${status}`,
+              '```',
+              summary,
+              '```',
+              ...(resources ? ['**Resources**', '```diff', resources, '```'] : []),
+              '',
+              `<sub>Summary only: this repo is public, so CI never shows attribute values. ` +
+                `Run \`terraform plan\` in \`${DIR}\` for the full diff. ` +
+                `Commit ${context.payload.pull_request.head.sha.slice(0, 7)} · [run](${runUrl})</sub>`,
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const mine = comments.find(c => c.user.type === 'Bot' && c.body.includes(marker));
+
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
