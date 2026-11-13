@@ -1,0 +1,19 @@
+{
+  "_comment": "Every Terraform root folder CI knows about. fmt/validate/tflint run on all of them; plan and apply only where the flag is true. Adding an environment = adding one entry. 'why' explains any flag that is false.",
+  "roots": [
+    {
+      "name": "bootstrap",
+      "dir": "bootstrap",
+      "plan": true,
+      "apply": false,
+      "why": "Never auto-applied: the pipeline must not edit its own permissions. Apply by hand."
+    },
+    {
+      "name": "dev",
+      "dir": "environments/dev",
+      "plan": false,
+      "apply": false,
+      "why": "EC2 Mac. Applying creates a mac2.metal host with a 24h minimum bill. Off until TSL-44 (rent-a-mac)."
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+# Runs on every PR into main.
+#
+#   checks - fmt, validate, tflint, checkov. Code only; no AWS access.
+#   plan   - (goal 2) terraform plan per root, posted as a PR comment.
+#
+# Which folders get checked comes from .github/terraform-roots.json.
+name: Terraform PR
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to the same PR cancels the older, now-stale run.
+concurrency:
+  group: terraform-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.17.1"
+  TF_IN_AUTOMATION: "true" # trims "next, run terraform apply" hints from output
+
+jobs:
+  roots:
+    name: Read root list
+    runs-on: ubuntu-latest
+    outputs:
+      all: ${{ steps.read.outputs.all }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read .github/terraform-roots.json
+        id: read
+        run: echo "all=$(jq -c '.roots' .github/terraform-roots.json)" >> "$GITHUB_OUTPUT"
+
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # Whole repo in one go, modules included. -diff shows what to fix.
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive -diff
+
+  validate:
+    name: validate (${{ matrix.root.name }})
+    needs: roots
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # one broken root shouldn't hide results for the others
+      matrix:
+        root: ${{ fromJSON(needs.roots.outputs.all) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.root.dir }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # -backend=false: download providers only, never touch the S3 state.
+      #   No AWS credentials and no tfvars needed, so this is safe for dev too.
+      # -lockfile=readonly: fail if .terraform.lock.hcl is out of date
+      #   instead of quietly rewriting it.
+      - name: terraform init
+        run: terraform init -backend=false -lockfile=readonly -input=false
+
+      - name: terraform validate
+        run: terraform validate
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-${{ hashFiles('.tflint.hcl') }}
+
+      - uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: v0.66.0
+
+      - name: tflint --init
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # avoids GitHub API rate limits when downloading plugins
+
+      # Absolute --config: see the note at the top of .tflint.hcl.
+      - name: tflint
+        run: tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --format compact
+
+  checkov:
+    name: checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Fails the build on any finding. Accepted findings get an inline
+      #   #checkov:skip=<CHECK_ID>:<reason>
+      # on the resource, so every exception is visible and explained.
+      - name: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          quiet: true # only print failures
+          download_external_modules: false
