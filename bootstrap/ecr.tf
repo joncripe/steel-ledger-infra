@@ -4,6 +4,7 @@
 # builds an image once, and dev/stage/prod deploy that same image by tag.
 
 resource "aws_ecr_repository" "api" {
+  #checkov:skip=CKV_AWS_136:Default AES256 encryption is enough. Images hold no secrets, and pull/push is controlled by IAM; a KMS key would add cost and key-policy grants for every role that pulls.
   name = "steel-ledger-api"
 
   # A tag, once pushed, always points at the same image. CI tags by git

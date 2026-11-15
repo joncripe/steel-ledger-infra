@@ -1,5 +1,15 @@
+# dev environment for The Steel Ledger (web/API stack).
+#
+# Starts empty on purpose: it proves the CI pipeline end to end (plan on PR,
+# apply on merge, GitHub Environment gate, dev-apply role, state + lock)
+# before any real resources exist. RDS, App Runner, etc. get added here by
+# later tickets, along with the write permissions they need in
+# bootstrap/ci-policies.tf (ADR 0008).
+#
+# The EC2 Mac lives separately in environments/dev-mac.
+
 terraform {
-  required_version = ">= 1.10.0"
+  required_version = ">= 1.10.0" # use_lockfile needs 1.10+
 
   required_providers {
     aws = {
@@ -8,9 +18,10 @@ terraform {
     }
   }
 
+  # Key must stay under "dev/": the dev CI roles can only touch that prefix.
   backend "s3" {
     bucket       = "steel-ledger-tfstate"
-    key          = "dev/ec2-mac-dev.tfstate"
+    key          = "dev/terraform.tfstate"
     region       = "us-east-1"
     use_lockfile = true
     encrypt      = true
@@ -19,14 +30,12 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
-}
 
-module "ec2_mac_dev" {
-  source = "../../modules/ec2-mac-dev"
-
-  project_name      = "steel-ledger"
-  environment       = "dev"
-  availability_zone = var.availability_zone
-  ssh_allowed_cidr  = var.ssh_allowed_cidr
-  key_name          = var.key_name
+  default_tags {
+    tags = {
+      Project     = "steel-ledger"
+      Environment = "dev"
+      ManagedBy   = "terraform"
+    }
+  }
 }

@@ -1,0 +1,42 @@
+{
+  "_comment": "Every Terraform root folder CI knows about. fmt/validate/tflint run on all of them. plan: true = plan on every PR. apply: 'auto' = apply on merge to main, 'manual' = apply only from a Run workflow click (promotion), false = never in CI. env picks the CI roles (steel-ledger-<env>-plan/-apply) and the GitHub Environment. 'why' explains anything switched off.",
+  "roots": [
+    {
+      "name": "bootstrap",
+      "dir": "bootstrap",
+      "env": "bootstrap",
+      "plan": true,
+      "apply": false,
+      "why": "Never applied by CI: the pipeline must not edit its own permissions. Apply by hand."
+    },
+    {
+      "name": "dev-mac",
+      "dir": "environments/dev-mac",
+      "env": "dev",
+      "plan": false,
+      "apply": false,
+      "why": "EC2 Mac. Applying creates a mac2.metal host with a 24h minimum bill, and its tfvars hold a home IP. Off until TSL-44 (rent-a-mac)."
+    },
+    {
+      "name": "dev",
+      "dir": "environments/dev",
+      "env": "dev",
+      "plan": true,
+      "apply": "auto"
+    },
+    {
+      "name": "stage",
+      "dir": "environments/stage",
+      "env": "stage",
+      "plan": true,
+      "apply": "manual"
+    },
+    {
+      "name": "prod",
+      "dir": "environments/prod",
+      "env": "prod",
+      "plan": true,
+      "apply": "manual"
+    }
+  ]
+}

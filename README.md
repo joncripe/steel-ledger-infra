@@ -18,7 +18,7 @@ graph TD
 
 Port 5900 (VNC) is never opened in the security group, so VNC is reached through an SSH tunnel. Assumes the instance is already set up — see [docs/mac-setup.md](./docs/mac-setup.md) for one-time setup (passwords, enabling Screen Sharing, etc.).
 
-1. **Get the instance IP** (from `environments/dev`):
+1. **Get the instance IP** (from `environments/dev-mac`):
    ```
    terraform output mac_dev_public_ip
    ```

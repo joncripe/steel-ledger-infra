@@ -1,0 +1,51 @@
+# Shared setup for every Terraform job: install Terraform and, optionally,
+# log in to AWS as one of the CI roles (bootstrap/github-oidc.tf).
+#
+# Used by terraform-pr.yml and infra-health.yml, so the Terraform version
+# and login steps live in one place.
+#
+#   - uses: ./.github/actions/terraform-setup
+#     with:
+#       role: steel-ledger-bootstrap-plan       # omit for code-only jobs
+#       aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+#
+# A job that logs in needs `permissions: id-token: write`.
+name: Terraform setup
+description: Install Terraform and optionally assume a CI role via OIDC.
+
+inputs:
+  terraform-version:
+    description: Terraform version. Bump here to upgrade every workflow.
+    default: "1.17.1"
+  role:
+    description: CI role name to assume (e.g. steel-ledger-dev-plan). Empty = no AWS login.
+    default: ""
+  aws-account-id:
+    description: AWS account that owns the role. Required when role is set.
+    default: ""
+  aws-region:
+    description: AWS region.
+    default: us-east-1
+
+runs:
+  using: composite
+  steps:
+    - uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        terraform_wrapper: false
+
+    # Fail early with a clear message instead of an opaque STS error.
+    - name: Check AWS inputs
+      if: inputs.role != '' && inputs.aws-account-id == ''
+      shell: bash
+      run: |
+        echo "::error::aws-account-id is empty. Set the AWS_ACCOUNT_ID repo variable (Settings > Secrets and variables > Actions > Variables)."
+        exit 1
+
+    - name: Assume ${{ inputs.role }} via OIDC
+      if: inputs.role != ''
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.aws-account-id }}:role/${{ inputs.role }}
+        aws-region: ${{ inputs.aws-region }}

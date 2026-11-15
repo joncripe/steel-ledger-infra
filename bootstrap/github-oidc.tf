@@ -2,7 +2,13 @@
 # instead of long-lived access keys stored as repo secrets.
 #
 # Lives in bootstrap/ because the OIDC provider is account-wide (one per
-# issuer URL per account) and every environment's CI role trusts it.
+# issuer URL per account) and every CI role trusts it.
+#
+# Roles are split by what they can do (ADR 0008):
+#   <env>-plan  - look only. Used by PR plans and nightly drift checks.
+#   <env>-apply - can change things. Only a job running in that env's
+#                 GitHub Environment can assume it (stage/prod need approval).
+# Their permissions live in ci-policies.tf.
 
 locals {
   github_repo = "joncripe/steel-ledger-infra"
@@ -13,28 +19,38 @@ locals {
   # name can't inherit this trust. Found via CloudTrail on the first run.
   github_sub_repo = "joncripe@17099383/steel-ledger-infra@1319805938"
 
-  # One CI role per environment. Each value lists the `sub` contexts that
-  # may assume that role (any one match is enough).
-  #   dev   - anything in this repo (branches, tags, PRs)
-  #   stage - PRs (plan), main, or the `stage` GitHub Environment
-  #   prod  - PRs (plan), main, or the `prod` GitHub Environment
-  # Only dev has permissions (read-only). Stage and prod exist so their
-  # trust is in place, but get no policy until TSL-19 scopes them; account-
-  # wide ReadOnlyAccess would let any PR read every state file. Write access
-  # and a plan/apply role split also come with TSL-19.
-  gha_roles = {
-    dev = ["*"]
-    stage = [
-      "pull_request",
-      "ref:refs/heads/main",
-      "environment:stage",
-    ]
-    prod = [
-      "pull_request",
-      "ref:refs/heads/main",
-      "environment:prod",
-    ]
-  }
+  environments = ["dev", "stage", "prod"]
+
+  # Contexts that may assume a plan role: any PR, plus main (Infra health's
+  # nightly runs come from main). A job that sets `environment:` gets an
+  # environment:<name> sub instead, so it can't use these.
+  plan_subs = ["pull_request", "ref:refs/heads/main"]
+
+  # Every CI role. Key = role suffix; state_prefix = the state keys it may
+  # touch (<prefix>/...). bootstrap only gets a plan role: the pipeline
+  # must never be able to edit its own permissions.
+  ci_roles = merge(
+    {
+      "bootstrap-plan" = {
+        env          = "bootstrap"
+        access       = "plan"
+        state_prefix = "bootstrap"
+        subs         = local.plan_subs
+      }
+    },
+    { for env in local.environments : "${env}-plan" => {
+      env          = env
+      access       = "plan"
+      state_prefix = env
+      subs         = local.plan_subs
+    } },
+    { for env in local.environments : "${env}-apply" => {
+      env          = env
+      access       = "apply"
+      state_prefix = env
+      subs         = ["environment:${env}"]
+    } },
+  )
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -50,8 +66,8 @@ resource "aws_iam_openid_connect_provider" "github" {
   }
 }
 
-data "aws_iam_policy_document" "gha_trust" {
-  for_each = local.gha_roles
+data "aws_iam_policy_document" "ci_trust" {
+  for_each = local.ci_roles
 
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -67,33 +83,27 @@ data "aws_iam_policy_document" "gha_trust" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # StringEquals, not StringLike: every allowed context is spelled out,
+    # so no wildcard can match more than intended.
     condition {
-      test     = "StringLike"
+      test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [for ctx in each.value : "repo:${local.github_sub_repo}:${ctx}"]
+      values   = [for ctx in each.value.subs : "repo:${local.github_sub_repo}:${ctx}"]
     }
   }
 }
 
-resource "aws_iam_role" "gha" {
-  for_each = local.gha_roles
+resource "aws_iam_role" "ci" {
+  for_each = local.ci_roles
 
-  name               = "steel-ledger-${each.key}-gha"
-  description        = "Assumed by GitHub Actions in ${local.github_repo} via OIDC (${each.key})."
-  assume_role_policy = data.aws_iam_policy_document.gha_trust[each.key].json
+  name               = "steel-ledger-${each.key}"
+  description        = "GitHub Actions (${local.github_repo}) via OIDC: ${each.value.access} for ${each.value.env}."
+  assume_role_policy = data.aws_iam_policy_document.ci_trust[each.key].json
 
   tags = {
     Project     = "steel-ledger"
-    Environment = each.key
+    Environment = each.value.env
+    Access      = each.value.access
     ManagedBy   = "terraform"
   }
-}
-
-# Dev only, to prove the OIDC wiring. Replace with a scoped policy before
-# CI needs to apply.
-resource "aws_iam_role_policy_attachment" "gha_readonly" {
-  for_each = toset(["dev"])
-
-  role       = aws_iam_role.gha[each.key].name
-  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }

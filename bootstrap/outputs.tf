@@ -7,7 +7,7 @@ output "api_ecr_repository_url" {
   value       = aws_ecr_repository.api.repository_url
 }
 
-output "gha_role_arns" {
-  description = "CI role ARN per environment, for aws-actions/configure-aws-credentials."
-  value       = { for env, role in aws_iam_role.gha : env => role.arn }
+output "ci_role_arns" {
+  description = "CI role ARNs keyed by <env>-<plan|apply>, for aws-actions/configure-aws-credentials."
+  value       = { for k, role in aws_iam_role.ci : k => role.arn }
 }
