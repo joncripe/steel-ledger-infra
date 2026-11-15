@@ -12,7 +12,7 @@ TSL-19 adds apply to CI. The first plan was to apply every environment on merge 
 - **The Mac gets its own root.** The Mac moved to `environments/dev-mac` and is still off in CI (`plan: false, apply: false`) until TSL-44. Its state key (`dev/ec2-mac-dev.tfstate`) didn't change, so nothing moved in AWS.
 - **dev, stage and prod are normal roots.** `environments/{dev,stage,prod}` started empty (backend and provider only, state at `<env>/terraform.tfstate`), so the pipeline could be proven end to end before real resources exist.
 - **Each root has an apply mode** in `.github/terraform-roots.json`:
-  - `"auto"`: applied on every merge to main (dev).
+  - `"auto"`: applied on every merge to main (dev), and on demand from **Run workflow** (for example, to re-apply after a manual change in the console).
   - `"manual"`: applied only from **Run workflow** on `Terraform apply`, which promotes whatever is on main (stage, prod).
   - `false`: never applied by CI (bootstrap, dev-mac).
 - **GitHub Environments (`dev`, `stage`, `prod`) are limited to `main` and have no required reviewers.** The apply roles only trust their own `environment:<env>` (ADR 0008), so the Environment's branch rule is what stops unmerged code from being applied. Clicking Run is the approval.
