@@ -1,13 +1,21 @@
 # Applies Terraform from main.
 #
 #   push to main      - applies every root with apply: "auto" (dev).
-#   Run workflow      - promotes one root with apply: "manual" (stage/prod).
+#   Run workflow      - applies one root on demand: any "auto" root (re-run
+#                       dev) or a "manual" one (promote stage/prod).
 #
 # Roots and their apply mode come from .github/terraform-roots.json.
 # Each job runs inside the root's GitHub Environment, which is the only way
 # to assume steel-ledger-<env>-apply (ADR 0008). The Environments only allow
 # main, so nothing unmerged can be applied.
 name: Terraform apply
+# Title shown in the Actions list, e.g. "Terraform apply: prod (manual)".
+# On merge it names the apply: "auto" roots, so keep it in sync with
+# terraform-roots.json.
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('Terraform apply: {0} (manual)', inputs.environment)
+      || 'Terraform apply: dev (merge)' }}
 
 on:
   push:
@@ -15,11 +23,11 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: Environment to promote (applies what's on main)
+        description: Environment to apply (uses what's on main)
         type: choice
-        # Keep in sync with the apply: "manual" roots in terraform-roots.json.
-        # The roots job below rejects anything else.
-        options: [stage, prod]
+        # Keep in sync with the apply: "auto"/"manual" roots in
+        # terraform-roots.json. The roots job below rejects anything else.
+        options: [dev, stage, prod]
         required: true
 
 permissions:
@@ -44,9 +52,10 @@ jobs:
           NAME: ${{ inputs.environment }}
         run: |
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            list=$(jq -c --arg n "$NAME" '[.roots[] | select(.apply == "manual" and .name == $n)]' .github/terraform-roots.json)
+            # Any root CI may apply ("auto" or "manual"); never apply: false.
+            list=$(jq -c --arg n "$NAME" '[.roots[] | select((.apply == "auto" or .apply == "manual") and .name == $n)]' .github/terraform-roots.json)
             if [ "$list" = "[]" ]; then
-              echo "::error::'$NAME' isn't an apply: \"manual\" root in terraform-roots.json."
+              echo "::error::'$NAME' isn't an apply: \"auto\" or \"manual\" root in terraform-roots.json."
               exit 1
             fi
           else
