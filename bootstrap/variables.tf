@@ -9,3 +9,15 @@ variable "state_bucket_name" {
   type        = string
   default     = "steel-ledger-tfstate"
 }
+
+variable "monthly_budget_usd" {
+  description = "Monthly AWS spend (whole account) that triggers the budget emails."
+  type        = number
+  default     = 25
+}
+
+variable "budget_alert_email_parameter" {
+  description = "SSM Parameter Store name holding the budget alert email. Created by hand so the address stays out of this public repo."
+  type        = string
+  default     = "/steel-ledger/budget-alert-email"
+}

@@ -1,10 +1,13 @@
 # dev environment for The Steel Ledger (web/API stack).
 #
-# Starts empty on purpose: it proves the CI pipeline end to end (plan on PR,
-# apply on merge, GitHub Environment gate, dev-apply role, state + lock)
-# before any real resources exist. RDS, App Runner, etc. get added here by
-# later tickets, along with the write permissions they need in
-# bootstrap/ci-policies.tf (ADR 0008).
+# Auto-applied on every merge to main (ADR 0009). Each new resource type
+# needs its write permissions in bootstrap/ci-policies.tf first (ADR 0008).
+#
+#   network  - VPC, public/private subnets, the API's security group (TSL-8)
+#   database - Postgres in the private subnets (TSL-8)
+#
+# dev settings lean cheap and disposable: smallest instance, one day of
+# backups, and no deletion protection (ADR 0010).
 #
 # The EC2 Mac lives separately in environments/dev-mac.
 
@@ -38,4 +41,26 @@ provider "aws" {
       ManagedBy   = "terraform"
     }
   }
+}
+
+module "network" {
+  source = "../../modules/network"
+
+  name               = "steel-ledger-dev"
+  availability_zones = ["us-east-1a", "us-east-1b"]
+}
+
+module "database" {
+  source = "../../modules/database"
+
+  name                    = "steel-ledger-dev" # must match the CI log-group permission
+  vpc_id                  = module.network.vpc_id
+  subnet_ids              = module.network.private_subnet_ids
+  allowed_security_groups = { api = module.network.api_security_group_id }
+
+  # Throwaway dev data: cheap and easy to tear down.
+  backup_retention_days = 1
+  deletion_protection   = false
+  skip_final_snapshot   = true
+  apply_immediately     = true
 }

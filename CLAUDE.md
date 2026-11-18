@@ -9,7 +9,7 @@ Terraform for all AWS infra behind **The Steel Ledger**: RDS, App Runner, S3, Se
 - Jira: project `TSL`, Epic 1 = `TSL-4`
 
 ## Stack
-Terraform, AWS. State: S3 backend with native locking (`use_lockfile`), no DynamoDB table. One reusable module, per-environment `.tfvars` (dev/stage/prod).
+Terraform, AWS. State: S3 backend with native locking (`use_lockfile`), no DynamoDB table. Reusable modules in `modules/` (`network`, `database`, `ec2-mac-dev`), called from each `environments/<env>` root with that env's settings as committed values (CI never sees tfvars).
 
 ## Used by
 `steel-ledger-api` and `steel-ledger-ios` depend on resources provisioned here. Their CLAUDE.md files link back to this repo rather than duplicating infra details.
@@ -27,4 +27,6 @@ Terraform, AWS. State: S3 backend with native locking (`use_lockfile`), no Dynam
 - Roles: `steel-ledger-<env>-plan` (PRs, main) and `-apply` (only inside that GitHub Environment). Bootstrap has plan only
 
 ## Current status
-`bootstrap/` is live: S3 state bucket (with version cleanup), GitHub OIDC provider, 7 CI roles (`bootstrap-plan`, `{dev,stage,prod}-{plan,apply}`), and ECR repo `steel-ledger-api`. `environments/{dev,stage,prod}` exist but are empty (backend + provider only). The EC2 Mac lives in `environments/dev-mac`: built and verified, then torn down, and off in CI until TSL-44. `Infra health` runs a nightly OIDC check. RDS, App Runner, Secrets Manager not started.
+`bootstrap/` is live: S3 state bucket (with version cleanup), GitHub OIDC provider, 7 CI roles (`bootstrap-plan`, `{dev,stage,prod}-{plan,apply}`), and ECR repo `steel-ledger-api`. TSL-8 adds to bootstrap: `dev-apply` write permissions for VPC/RDS, and a $25/mo Budgets alert (email read from SSM `/steel-ledger/budget-alert-email`).
+
+`environments/dev` has the VPC (public/private subnets in 2 AZs, no NAT, empty `api` SG for TSL-18) and RDS Postgres 18 (db.t4g.micro, RDS-managed password in Secrets Manager). See ADR 0010, including the public-subnet-tasks risk to revisit before prod has real users. `environments/{stage,prod}` are still empty. The EC2 Mac lives in `environments/dev-mac`: built and verified, then torn down, and off in CI until TSL-44. `Infra health` runs a nightly OIDC check. ECS Fargate + ALB (TSL-18) not started.
